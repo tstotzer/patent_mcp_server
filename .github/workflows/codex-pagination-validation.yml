@@ -1,0 +1,52 @@
+name: Contributor pagination validation
+
+on:
+  push:
+    branches: [codex/validate-truncated-page]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: 928593030b54cbf799de3737d05bf483e735f504
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          python-version: '3.12'
+      - name: Install locked project environment
+        run: uv sync --dev --locked
+      - name: Reproduce regression on unchanged base production source
+        shell: bash
+        run: |
+          git fetch --no-tags origin 78242d28da9fb98104b1363ddca95e1be75f0fc0 --depth=1
+          git show 78242d28da9fb98104b1363ddca95e1be75f0fc0:src/patent_mcp_server/util/response.py > src/patent_mcp_server/util/response.py
+          set +e
+          uv run --locked pytest test/unit/test_response_util.py test/unit/test_odp_search.py -k truncated_final_page -q > base-regression.log 2>&1
+          result=$?
+          set -e
+          cat base-regression.log
+          test "$result" -eq 1
+          grep -Eq '4 failed' base-regression.log
+          git restore --source=928593030b54cbf799de3737d05bf483e735f504 -- src/patent_mcp_server/util/response.py
+          git diff --exit-code
+      - name: Run complete native Linux suite on exact source commit
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run --locked pytest | tee full-tests.log
+          git diff --exit-code
+          test "$(git rev-parse HEAD)" = 928593030b54cbf799de3737d05bf483e735f504
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: pagination-validation
+          path: |
+            base-regression.log
+            full-tests.log
+          retention-days: 3
